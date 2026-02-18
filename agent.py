@@ -1,144 +1,80 @@
 """Agent SDK サンプル: リポジトリ日次レポート生成エージェント
 
-GitHub リポジトリの直近のコミット、Issue、PR を分析し、
-日次レポートを生成する Agent SDK のサンプルスクリプト。
+Claude Agent SDK を使って、リポジトリの直近のコミット、Issue、PR を分析し、
+日次レポートを生成するサンプルスクリプト。
+
+認証:
+- ANTHROPIC_API_KEY 環境変数があれば API キーで認証
+- なければ Claude Code CLI 経由で認証（Max/Pro プラン対応）
 """
 
-import os
-import subprocess
-import sys
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 
-import anthropic
+from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, ResultMessage
 
 
-def get_git_log(since_hours: int = 24) -> str:
-    """直近のコミットログを取得する。"""
-    try:
-        result = subprocess.run(
-            ["git", "log", f"--since={since_hours} hours ago", "--oneline", "--no-merges"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        return result.stdout.strip() or "直近24時間のコミットはありません。"
-    except (subprocess.SubprocessError, FileNotFoundError):
-        return "Git ログの取得に失敗しました。"
+REPORT_PROMPT = """\
+このリポジトリの日次レポートを生成してください。
 
+以下の手順で情報を収集し、Markdown 形式のレポートを作成してください：
 
-def get_changed_files(since_hours: int = 24) -> str:
-    """直近に変更されたファイル一覧を取得する。"""
-    try:
-        result = subprocess.run(
-            ["git", "log", f"--since={since_hours} hours ago", "--name-only", "--pretty=format:"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        files = sorted(set(line for line in result.stdout.strip().splitlines() if line))
-        return "\n".join(files) if files else "直近24時間の変更ファイルはありません。"
-    except (subprocess.SubprocessError, FileNotFoundError):
-        return "変更ファイルの取得に失敗しました。"
-
-
-def get_open_issues_and_prs() -> str:
-    """gh CLI でオープンな Issue と PR を取得する。"""
-    output_parts = []
-
-    # Issues
-    try:
-        result = subprocess.run(
-            ["gh", "issue", "list", "--state", "open", "--limit", "10", "--json", "number,title,createdAt"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        output_parts.append(f"## Open Issues\n{result.stdout.strip() or 'なし'}")
-    except (subprocess.SubprocessError, FileNotFoundError):
-        output_parts.append("## Open Issues\ngh CLI が利用できません。")
-
-    # Pull Requests
-    try:
-        result = subprocess.run(
-            ["gh", "pr", "list", "--state", "open", "--limit", "10", "--json", "number,title,createdAt"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        output_parts.append(f"## Open PRs\n{result.stdout.strip() or 'なし'}")
-    except (subprocess.SubprocessError, FileNotFoundError):
-        output_parts.append("## Open PRs\ngh CLI が利用できません。")
-
-    return "\n\n".join(output_parts)
-
-
-def build_prompt(git_log: str, changed_files: str, issues_and_prs: str) -> str:
-    """エージェントに渡すプロンプトを構築する。"""
-    return f"""あなたはリポジトリの日次レポートを生成するアシスタントです。
-以下の情報をもとに、Markdown 形式で簡潔な日次サマリーレポートを作成してください。
-
-# 直近24時間のコミット
-{git_log}
-
-# 変更されたファイル
-{changed_files}
-
-# オープンな Issue / PR
-{issues_and_prs}
+1. `git log --since="24 hours ago" --oneline --no-merges` で直近24時間のコミットを確認
+2. `git log --since="24 hours ago" --name-only --pretty=format:` で変更ファイルを確認
+3. `gh issue list --state open --limit 10` でオープンな Issue を確認（gh が使えない場合はスキップ）
+4. `gh pr list --state open --limit 10` でオープンな PR を確認（gh が使えない場合はスキップ）
 
 レポートには以下を含めてください：
-1. 本日のハイライト（主な変更点を2-3行で要約）
-2. コミット一覧
-3. 変更ファイル一覧
-4. オープンな Issue / PR の状況
-5. 推奨アクション（対応が必要そうな項目があれば）
+- 本日のハイライト（主な変更点を2-3行で要約）
+- コミット一覧
+- 変更ファイル一覧
+- オープンな Issue / PR の状況
+- 推奨アクション（対応が必要そうな項目があれば）
 
-日付: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}
-"""
+レポートを reports/daily-report-{today}.md に保存してください。
+""".format(today=datetime.now(timezone.utc).strftime("%Y-%m-%d"))
 
 
-def run_agent() -> str:
+async def run_agent() -> str:
     """Agent SDK を使ってレポートを生成する。"""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("Error: ANTHROPIC_API_KEY が設定されていません。", file=sys.stderr)
-        sys.exit(1)
+    report_text = ""
 
-    git_log = get_git_log()
-    changed_files = get_changed_files()
-    issues_and_prs = get_open_issues_and_prs()
+    async for message in query(
+        prompt=REPORT_PROMPT,
+        options=ClaudeAgentOptions(
+            allowed_tools=["Read", "Edit", "Write", "Bash", "Glob", "Grep"],
+            permission_mode="bypassPermissions",
+        ),
+    ):
+        if isinstance(message, AssistantMessage):
+            for block in message.content:
+                if hasattr(block, "text"):
+                    print(block.text)
+                    report_text += block.text + "\n"
+                elif hasattr(block, "name"):
+                    print(f"[Tool] {block.name}")
+        elif isinstance(message, ResultMessage):
+            print(f"[Done] {message.subtype}")
 
-    prompt = build_prompt(git_log, changed_files, issues_and_prs)
-
-    client = anthropic.Anthropic(api_key=api_key)
-    message = client.messages.create(
-        model="claude-sonnet-4-5-20250929",
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    return message.content[0].text
-
-
-def save_report(content: str) -> Path:
-    """レポートをファイルに保存する。"""
-    reports_dir = Path(__file__).parent / "reports"
-    reports_dir.mkdir(exist_ok=True)
-
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    report_path = reports_dir / f"daily-report-{today}.md"
-    report_path.write_text(content, encoding="utf-8")
-    return report_path
+    return report_text
 
 
 def main():
     print("日次レポートを生成中...")
-    report = run_agent()
-    path = save_report(report)
-    print(f"レポートを保存しました: {path}")
-    print("---")
-    print(report)
+    report = asyncio.run(run_agent())
+
+    # レポートファイルの確認
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    report_path = Path(__file__).parent / "reports" / f"daily-report-{today}.md"
+    if report_path.exists():
+        print(f"レポートを保存しました: {report_path}")
+    else:
+        # エージェントがファイルを作成しなかった場合のフォールバック
+        reports_dir = Path(__file__).parent / "reports"
+        reports_dir.mkdir(exist_ok=True)
+        report_path.write_text(report, encoding="utf-8")
+        print(f"レポートを保存しました (fallback): {report_path}")
 
 
 if __name__ == "__main__":
