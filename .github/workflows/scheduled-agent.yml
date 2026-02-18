@@ -29,9 +29,13 @@ jobs:
           prompt: |
             このリポジトリの日次レポートを生成してください。
 
-            1. git log --since="24 hours ago" --oneline --no-merges で直近のコミットを確認
-            2. 変更されたファイルを確認
-            3. まず mkdir -p reports を実行してから、reports/daily-report-$(date -u +%Y-%m-%d).md にレポートを保存すること（必ず reports/ ディレクトリ配下に保存）
+            1. Bash ツールで git log --since="24 hours ago" --oneline --no-merges を実行して直近のコミットを確認
+            2. Bash ツールで変更されたファイルを確認
+            3. レポート内容を Markdown で作成し、Bash ツールで以下のコマンドを実行してファイルに保存:
+               mkdir -p reports && cat > reports/daily-report-$(date -u +%Y-%m-%d).md << 'REPORT_EOF'
+               （ここにレポート内容）
+               REPORT_EOF
+            4. 最後に ls -la reports/ で保存を確認
 
             レポートには以下を含めてください：
             - 本日のハイライト（主な変更点の要約）
@@ -40,12 +44,13 @@ jobs:
             - 推奨アクション
           claude_args: "--max-turns 10"
 
-      - name: Collect reports
+      - name: List generated files
         if: always()
         run: |
-          mkdir -p reports
-          find . -maxdepth 1 -name 'daily-report-*.md' -exec mv {} reports/ \;
-          ls -la reports/ || true
+          echo "=== workspace root ==="
+          find . -name 'daily-report-*.md' -type f 2>/dev/null
+          echo "=== reports/ ==="
+          ls -la reports/ 2>/dev/null || echo "reports/ not found"
 
       - name: Upload report artifact
         if: always()
