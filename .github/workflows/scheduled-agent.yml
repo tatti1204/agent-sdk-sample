@@ -7,7 +7,7 @@ on:
   workflow_dispatch: # 手動実行用
 
 permissions:
-  contents: read
+  contents: write
   issues: read
   pull-requests: read
 
@@ -18,20 +18,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 50 # 直近のコミット履歴を取得
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+          fetch-depth: 50
 
       - name: Run daily report agent
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python agent.py
+        uses: anthropics/claude-code-action@v1
+        with:
+          # Max プランの OAuth トークンで認証（API キー不要）
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            このリポジトリの日次レポートを生成してください。
+
+            1. git log --since="24 hours ago" --oneline --no-merges で直近のコミットを確認
+            2. 変更されたファイルを確認
+            3. reports/daily-report-$(date -u +%Y-%m-%d).md にレポートを保存
+
+            レポートには以下を含めてください：
+            - 本日のハイライト（主な変更点の要約）
+            - コミット一覧
+            - 変更ファイル一覧
+            - 推奨アクション
+          claude_args: "--max-turns 10"
 
       - name: Upload report artifact
         uses: actions/upload-artifact@v4
