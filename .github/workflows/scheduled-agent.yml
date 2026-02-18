@@ -31,7 +31,7 @@ jobs:
 
             1. git log --since="24 hours ago" --oneline --no-merges で直近のコミットを確認
             2. 変更されたファイルを確認
-            3. reports/daily-report-$(date -u +%Y-%m-%d).md にレポートを保存
+            3. まず mkdir -p reports を実行してから、reports/daily-report-$(date -u +%Y-%m-%d).md にレポートを保存すること（必ず reports/ ディレクトリ配下に保存）
 
             レポートには以下を含めてください：
             - 本日のハイライト（主な変更点の要約）
@@ -42,7 +42,10 @@ jobs:
 
       - name: Upload report artifact
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: daily-report-${{ github.run_id }}
-          path: reports/
+          path: |
+            reports/
+            daily-report-*.md
           retention-days: 30
